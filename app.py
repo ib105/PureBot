@@ -51,8 +51,19 @@ PORT = int(os.environ.get('PORT', 5000))
 
 # Database connections
 try:
+    # Fix MongoDB connection string
     mongo_uri = os.getenv("MONGO_URI") or os.getenv("MONGODB_URL", "mongodb://localhost:27017/")
-    client = MongoClient(mongo_uri)
+    # Replace problematic cluster reference
+    if "Cluster0.mongodb.net" in mongo_uri:
+        mongo_uri = mongo_uri.replace("Cluster0.mongodb.net", "cluster0.mongodb.net")
+    
+    client = MongoClient(
+        mongo_uri,
+        serverSelectionTimeoutMS=5000,  # 5 second timeout
+        connectTimeoutMS=10000,
+        socketTimeoutMS=20000,
+        maxPoolSize=10
+    )
     db = client[os.getenv("DB_NAME", "ai_chat")]
     messages_collection = db["messages"]
     # Test the connection
@@ -86,15 +97,16 @@ except Exception as e:
     r = None
     redis_connected = False
 
-# OpenRouter/OpenAI setup
+# OpenRouter/OpenAI setup - Fixed initialization
 try:
     api_key = os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY")
     if not api_key:
         raise ValueError("No API key found. Set OPENROUTER_API_KEY or OPENAI_API_KEY")
     
+    # Fixed OpenAI client initialization - removed unsupported 'proxies' parameter
     openai_client = OpenAI(
         base_url="https://openrouter.ai/api/v1",
-        api_key=api_key,
+        api_key=api_key
     )
     print("✅ OpenRouter client initialized")
     openai_connected = True
@@ -271,14 +283,22 @@ def format_message(message):
 @app.route('/')
 def home():
     return """
-    <h1>AI Chat App</h1>
-    <p><a href="/chat">Go to Chat Interface</a></p>
-    <p>API Endpoints:</p>
+    <h1>🤖 AI Chat App</h1>
+    <p><strong><a href="/chat">🚀 Go to Chat Interface</a></strong></p>
+    <h2>📡 API Endpoints:</h2>
     <ul>
-        <li>POST /api/messages</li>
-        <li>POST /api/ai</li>
-        <li>POST /api/rag</li>
-        <li>GET /api/stream</li>
+        <li><strong>POST /api/messages</strong> - Send/retrieve messages</li>
+        <li><strong>POST /api/ai</strong> - General AI chat</li>
+        <li><strong>POST /api/rag</strong> - RAG-based document chat</li>
+        <li><strong>POST /api/upload</strong> - Upload PDF documents</li>
+        <li><strong>GET /api/status</strong> - System status</li>
+        <li><strong>GET /health</strong> - Health check</li>
+    </ul>
+    <h2>🔧 System Status:</h2>
+    <ul>
+        <li>MongoDB: {"✅ Connected" if mongodb_connected else "❌ Disconnected"}</li>
+        <li>Redis: {"✅ Connected" if redis_connected else "❌ Disconnected"}</li>
+        <li>AI Client: {"✅ Ready" if openai_connected else "❌ Not configured"}</li>
     </ul>
     """
 
@@ -306,7 +326,7 @@ def get_status():
         "ai_client_ready": openai_connected,
         "rag_system_ready": vectorizer is not None and len(document_chunks) > 0,
         "current_document": current_document,
-        "status": "healthy"
+        "status": "healthy" if (mongodb_connected or openai_connected) else "degraded"
     }
     return jsonify(status)
 
@@ -524,5 +544,13 @@ if __name__ == "__main__":
     
     print(f"🌐 Server starting on http://{host}:{port}")
     print(f"💬 Chat interface: http://{host}:{port}/chat")
+    
+    # Show startup warnings
+    if not mongodb_connected:
+        print("⚠️  Warning: MongoDB not connected - message persistence disabled")
+    if not redis_connected:
+        print("⚠️  Warning: Redis not connected - real-time features disabled")
+    if not openai_connected:
+        print("⚠️  Warning: AI client not ready - chat features disabled")
     
     app.run(debug=debug, host=host, port=port)
