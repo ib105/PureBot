@@ -1,0 +1,14 @@
+[build]
+builder = "nixpacks"
+
+[deploy]
+startCommand = "python app.py"
+healthcheckPath = "/api/status"
+healthcheckTimeout = 300
+restartPolicyType = "on_failure"
+
+[environments.production]
+[environments.production.variables]
+FLASK_ENV = "production"
+FLASK_DEBUG = "False"
+HOST = "0.0.0.0"
