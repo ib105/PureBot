@@ -17,7 +17,7 @@ COPY requirements.txt .
 # Install Python dependencies with optimizations
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt && \
-    python -c "import transformers; transformers.utils.move_cache()"
+ 
 
 # Copy application files
 COPY . .
