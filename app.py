@@ -63,21 +63,23 @@ except Exception as e:
 
 # Redis setup (optional for real-time features)
 try:
-    redis_url = os.getenv("REDIS_URL")
-    if redis_url:
-        r = redis.from_url(redis_url, decode_responses=True)
-    else:
-        r = redis.Redis(
-            host=os.getenv('REDIS_HOST', 'localhost'), 
-            port=int(os.getenv('REDIS_PORT', 6379)), 
-            db=0, 
-            decode_responses=True
-        )
+    redis_host = os.getenv("REDIS_HOST", "localhost")
+    redis_port = int(os.getenv("REDIS_PORT", 6379))
+    redis_db = int(os.getenv("REDIS_DB", 0))
+    
+    r = redis.Redis(
+        host=redis_host, 
+        port=redis_port, 
+        db=redis_db, 
+        decode_responses=True,
+        socket_connect_timeout=5,
+        socket_timeout=5
+    )
     r.ping()  # Test connection
     print("✅ Redis connected")
     redis_connected = True
 except Exception as e:
-    print(f"❌ Redis connection failed (optional): {e}")
+    print(f"❌ Redis connection failed: {e}")
     r = None
     redis_connected = False
 
@@ -517,9 +519,14 @@ if __name__ == "__main__":
     print(f"   Redis: {'✅' if redis_connected else '❌'}")
     print(f"   OpenRouter: {'✅' if openai_connected else '❌'}")
     print(f"   Upload folder: {UPLOAD_FOLDER}")
-    print(f"🌐 Server starting on port {PORT}")
+    
+    # Railway compatibility - use environment variables for host and port
+    port = int(os.getenv("PORT", 5000))
+    host = os.getenv("HOST", "0.0.0.0")
+    debug = os.getenv("FLASK_DEBUG", "False").lower() == "true"
+    
+    print(f"🌐 Server starting on http://{host}:{port}")
+    print(f"💬 Chat interface: http://{host}:{port}/chat")
     
     check_services()
-    
-    # Use Railway's PORT environment variable
-    app.run(host='0.0.0.0', port=PORT, debug=False)
+    app.run(debug=debug, host=host, port=port)
