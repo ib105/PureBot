@@ -7,15 +7,17 @@ import redis
 from openai import OpenAI
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_community.vectorstores import FAISS
-from sentence_transformers import SentenceTransformer
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from werkzeug.utils import secure_filename
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
 import os
 import json
 import datetime
 import tempfile
 import shutil
 import numpy as np
+import pickle
 
 # Load environment variables
 load_dotenv()
@@ -102,27 +104,68 @@ except Exception as e:
     openai_connected = False
 
 # Global variables for RAG system
-vectorstore = None
+document_chunks = []
+vectorizer = None
+document_vectors = None
 current_document = None
-embedding_model = None
 
-# Custom Embedding Class for FAISS compatibility
-class CustomEmbeddings:
-    def __init__(self, model_name="all-MiniLM-L6-v2"):
-        self.model = SentenceTransformer(model_name)
+# Lightweight Embedding Class using TF-IDF
+class LightweightEmbeddings:
+    def __init__(self):
+        self.vectorizer = TfidfVectorizer(
+            max_features=1000, 
+            stop_words='english',
+            ngram_range=(1, 2),
+            min_df=1,
+            max_df=0.95
+        )
+        self.fitted = False
+        self.document_texts = []
     
-    def embed_documents(self, texts):
-        return self.model.encode(texts).tolist()
+    def fit_transform(self, texts):
+        """Fit the vectorizer and transform texts"""
+        self.document_texts = texts
+        vectors = self.vectorizer.fit_transform(texts)
+        self.fitted = True
+        return vectors.toarray()
     
-    def embed_query(self, text):
-        return self.model.encode([text])[0].tolist()
+    def transform_query(self, query):
+        """Transform a query using the fitted vectorizer"""
+        if not self.fitted:
+            return np.zeros(1000)
+        return self.vectorizer.transform([query]).toarray()[0]
+    
+    def similarity_search(self, query, k=3):
+        """Find most similar documents to query"""
+        if not self.fitted or not self.document_texts:
+            return []
+        
+        query_vector = self.transform_query(query)
+        
+        # Calculate cosine similarity
+        similarities = cosine_similarity([query_vector], document_vectors)[0]
+        
+        # Get top k indices
+        top_indices = np.argsort(similarities)[::-1][:k]
+        
+        # Return documents with similarity scores
+        results = []
+        for idx in top_indices:
+            if similarities[idx] > 0.1:  # Minimum similarity threshold
+                results.append({
+                    'content': self.document_texts[idx],
+                    'similarity': similarities[idx],
+                    'index': idx
+                })
+        
+        return results
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 def initialize_rag_system(pdf_path):
     """Initialize RAG system with uploaded PDF"""
-    global vectorstore, current_document, embedding_model
+    global document_chunks, vectorizer, document_vectors, current_document
     try:
         print(f"🔄 Loading PDF: {pdf_path}")
         loader = PyPDFLoader(pdf_path)
@@ -138,12 +181,13 @@ def initialize_rag_system(pdf_path):
         documents = text_splitter.split_documents(pages)
         
         print("🔄 Creating embeddings...")
-        # Initialize embedding model once
-        if embedding_model is None:
-            embedding_model = CustomEmbeddings()
+        # Extract text content from documents
+        texts = [doc.page_content for doc in documents]
         
-        print("🔄 Building vector store...")
-        vectorstore = FAISS.from_documents(documents, embedding_model)
+        # Initialize lightweight embeddings
+        vectorizer = LightweightEmbeddings()
+        document_vectors = vectorizer.fit_transform(texts)
+        document_chunks = documents
         
         current_document = {
             'path': pdf_path,
@@ -157,7 +201,9 @@ def initialize_rag_system(pdf_path):
         return True
     except Exception as e:
         print(f"❌ RAG setup error: {e}")
-        vectorstore = None
+        document_chunks = []
+        vectorizer = None
+        document_vectors = None
         current_document = None
         return False
 
@@ -258,7 +304,7 @@ def get_status():
         "mongodb_connected": mongodb_connected,
         "redis_connected": redis_connected,
         "ai_client_ready": openai_connected,
-        "rag_system_ready": vectorstore is not None,
+        "rag_system_ready": vectorizer is not None and len(document_chunks) > 0,
         "current_document": current_document,
         "status": "healthy"
     }
@@ -315,15 +361,18 @@ def rag_chat():
     if not question:
         return jsonify({"error": "Question cannot be empty"}), 400
     
-    if not vectorstore:
+    if not vectorizer or not document_chunks:
         return jsonify({"error": "No document uploaded. Please upload a PDF document first."}), 400
     
     try:
-        # Retrieve relevant documents
-        docs = vectorstore.similarity_search(question, k=3)
+        # Retrieve relevant documents using lightweight similarity search
+        similar_docs = vectorizer.similarity_search(question, k=3)
+        
+        if not similar_docs:
+            return jsonify({"error": "No relevant content found in the document."}), 400
         
         # Combine context from retrieved documents
-        context = "\n\n".join([doc.page_content for doc in docs])
+        context = "\n\n".join([doc['content'] for doc in similar_docs])
         
         # Get AI response with context
         answer, model_used = get_ai_response(question, context)
@@ -332,7 +381,7 @@ def rag_chat():
         message_data = {
             "question": question,
             "answer": answer,
-            "context_used": len(docs),
+            "context_used": len(similar_docs),
             "mode": "rag",
             "model": model_used,
             "document": current_document['filename'] if current_document else None,
@@ -344,7 +393,7 @@ def rag_chat():
         response_data = {
             "answer": answer,
             "model": model_used,
-            "sources_used": len(docs),
+            "sources_used": len(similar_docs),
             "document": current_document['filename'] if current_document else None,
             "message_id": message_id
         }
