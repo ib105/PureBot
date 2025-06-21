@@ -10,3 +10,4 @@ faiss-cpu
 huggingface-hub
 werkzeug
 gunicorn
+scikit-learn
