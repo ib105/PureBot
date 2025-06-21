@@ -51,18 +51,23 @@ PORT = int(os.environ.get('PORT', 5000))
 
 # Database connections
 try:
-    # Fix MongoDB connection string
+    # Fixed MongoDB connection string - corrected cluster name
     mongo_uri = os.getenv("MONGO_URI") or os.getenv("MONGODB_URL", "mongodb://localhost:27017/")
-    # Replace problematic cluster reference
+    
+    # Fix common MongoDB URI issues
     if "Cluster0.mongodb.net" in mongo_uri:
         mongo_uri = mongo_uri.replace("Cluster0.mongodb.net", "cluster0.mongodb.net")
     
+    # Add additional connection options for better Railway compatibility
     client = MongoClient(
         mongo_uri,
-        serverSelectionTimeoutMS=5000,  # 5 second timeout
-        connectTimeoutMS=10000,
-        socketTimeoutMS=20000,
-        maxPoolSize=10
+        serverSelectionTimeoutMS=10000,  # Increased timeout
+        connectTimeoutMS=20000,
+        socketTimeoutMS=30000,
+        maxPoolSize=10,
+        retryWrites=True,
+        tls=True,  # Enable TLS for MongoDB Atlas
+        tlsAllowInvalidCertificates=False
     )
     db = client[os.getenv("DB_NAME", "ai_chat")]
     messages_collection = db["messages"]
@@ -75,27 +80,10 @@ except Exception as e:
     messages_collection = None
     mongodb_connected = False
 
-# Redis setup (optional for real-time features)
-try:
-    redis_host = os.getenv("REDIS_HOST", "localhost")
-    redis_port = int(os.getenv("REDIS_PORT", 6379))
-    redis_db = int(os.getenv("REDIS_DB", 0))
-    
-    r = redis.Redis(
-        host=redis_host, 
-        port=redis_port, 
-        db=redis_db, 
-        decode_responses=True,
-        socket_connect_timeout=5,
-        socket_timeout=5
-    )
-    r.ping()  # Test connection
-    print("✅ Redis connected")
-    redis_connected = True
-except Exception as e:
-    print(f"❌ Redis connection failed: {e}")
-    r = None
-    redis_connected = False
+# Redis setup (optional for real-time features) - Skip in Railway for now
+redis_connected = False
+r = None
+print("ℹ️ Redis skipped for Railway deployment")
 
 # OpenRouter/OpenAI setup - Fixed initialization
 try:
@@ -106,7 +94,8 @@ try:
     # Fixed OpenAI client initialization - removed unsupported 'proxies' parameter
     openai_client = OpenAI(
         base_url="https://openrouter.ai/api/v1",
-        api_key=api_key
+        api_key=api_key,
+        timeout=30.0  # Add timeout for better error handling
     )
     print("✅ OpenRouter client initialized")
     openai_connected = True
@@ -220,7 +209,7 @@ def initialize_rag_system(pdf_path):
         return False
 
 def get_ai_response(question, context=None):
-    """Get response from AI model"""
+    """Get response from AI model with improved error handling"""
     if not openai_connected or not openai_client:
         return "AI client not configured. Please check your API key.", None
     
@@ -242,20 +231,30 @@ Please answer the question based on the provided context."""
             system_message = "You are a helpful AI assistant. Provide accurate, informative, and helpful responses to user questions."
             user_message = question
         
-        response = openai_client.chat.completions.create(
-            model="deepseek/deepseek-r1",  # Using DeepSeek R1 via OpenRouter
-            messages=[
-                {"role": "system", "content": system_message},
-                {"role": "user", "content": user_message}
-            ],
-            max_tokens=1000,
-            temperature=0.7,
-        )
-        
-        answer = response.choices[0].message.content.strip()
-        model_used = response.model
-        
-        return answer, model_used
+        # Add retry logic for API calls
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                response = openai_client.chat.completions.create(
+                    model=os.getenv("AI_MODEL", "deepseek/deepseek-r1"),
+                    messages=[
+                        {"role": "system", "content": system_message},
+                        {"role": "user", "content": user_message}
+                    ],
+                    max_tokens=int(os.getenv("MAX_TOKENS", 1000)),
+                    temperature=float(os.getenv("TEMPERATURE", 0.7)),
+                )
+                
+                answer = response.choices[0].message.content.strip()
+                model_used = response.model
+                
+                return answer, model_used
+                
+            except Exception as retry_error:
+                if attempt == max_retries - 1:
+                    raise retry_error
+                print(f"API attempt {attempt + 1} failed, retrying...")
+                continue
         
     except Exception as e:
         print(f"❌ AI API error: {e}")
