@@ -10,7 +10,10 @@ redis==5.0.1
 # AI and OpenAI dependencies
 openai==1.12.0
 
-# LangChain dependencies for RAG
+# LangChain dependencies for RAG (Fixed for Railway deployment)
+# Install langsmith first to resolve dependency conflicts
+langsmith==0.0.87
+langchain-core==0.1.27
 langchain==0.1.6
 langchain-community==0.0.20
 langchain-text-splitters==0.0.1
