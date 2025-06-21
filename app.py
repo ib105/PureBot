@@ -8,7 +8,7 @@ from openai import OpenAI
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_community.vectorstores import FAISS
 from langchain_community.embeddings import HuggingFaceEmbeddings
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from werkzeug.utils import secure_filename
 import os
 import json
@@ -43,9 +43,13 @@ app.config['MAX_CONTENT_LENGTH'] = MAX_FILE_SIZE
 # Create upload directory if it doesn't exist
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
+# Get port from environment (Railway sets this)
+PORT = int(os.environ.get('PORT', 5000))
+
 # Database connections
 try:
-    client = MongoClient(os.getenv("MONGO_URI", "mongodb://localhost:27017/"))
+    mongo_uri = os.getenv("MONGO_URI") or os.getenv("MONGODB_URL", "mongodb://localhost:27017/")
+    client = MongoClient(mongo_uri)
     db = client[os.getenv("DB_NAME", "ai_chat")]
     messages_collection = db["messages"]
     # Test the connection
@@ -59,20 +63,33 @@ except Exception as e:
 
 # Redis setup (optional for real-time features)
 try:
-    r = redis.Redis(host='localhost', port=6379, db=0, decode_responses=True)
+    redis_url = os.getenv("REDIS_URL")
+    if redis_url:
+        r = redis.from_url(redis_url, decode_responses=True)
+    else:
+        r = redis.Redis(
+            host=os.getenv('REDIS_HOST', 'localhost'), 
+            port=int(os.getenv('REDIS_PORT', 6379)), 
+            db=0, 
+            decode_responses=True
+        )
     r.ping()  # Test connection
     print("✅ Redis connected")
     redis_connected = True
 except Exception as e:
-    print(f"❌ Redis connection failed: {e}")
+    print(f"❌ Redis connection failed (optional): {e}")
     r = None
     redis_connected = False
 
 # OpenRouter/OpenAI setup
 try:
+    api_key = os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise ValueError("No API key found. Set OPENROUTER_API_KEY or OPENAI_API_KEY")
+    
     openai_client = OpenAI(
         base_url="https://openrouter.ai/api/v1",
-        api_key=os.getenv("OPENROUTER_API_KEY"),
+        api_key=api_key,
     )
     print("✅ OpenRouter client initialized")
     openai_connected = True
@@ -107,7 +124,10 @@ def initialize_rag_system(pdf_path):
         
         print("🔄 Creating embeddings...")
         # Use HuggingFace embeddings (free, no API key needed)
-        embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+        embeddings = HuggingFaceEmbeddings(
+            model_name="all-MiniLM-L6-v2",
+            model_kwargs={'device': 'cpu'}  # Force CPU usage for Railway
+        )
         
         print("🔄 Building vector store...")
         vectorstore = FAISS.from_documents(documents, embeddings)
@@ -131,7 +151,7 @@ def initialize_rag_system(pdf_path):
 def get_ai_response(question, context=None):
     """Get response from AI model"""
     if not openai_connected or not openai_client:
-        return "AI client not configured. Please check your OpenRouter API key.", None
+        return "AI client not configured. Please check your API key.", None
     
     try:
         if context:
@@ -172,7 +192,6 @@ Please answer the question based on the provided context."""
 
 def save_message(message_data):
     """Save message to database"""
-    # Fixed: Properly check if MongoDB is connected
     if mongodb_connected and messages_collection is not None:
         try:
             result = messages_collection.insert_one(message_data)
@@ -249,7 +268,8 @@ def get_status():
         "redis_connected": redis_connected,
         "ai_client_ready": openai_connected,
         "rag_system_ready": vectorstore is not None,
-        "current_document": current_document
+        "current_document": current_document,
+        "status": "healthy"
     }
     return jsonify(status)
 
@@ -463,6 +483,20 @@ def list_documents():
     except Exception as e:
         return jsonify({"error": f"Failed to list documents: {str(e)}"}), 500
 
+# Health check endpoint for Railway
+@app.route("/health", methods=["GET"])
+def health_check():
+    """Health check endpoint"""
+    return jsonify({
+        "status": "healthy",
+        "timestamp": datetime.datetime.now().isoformat(),
+        "services": {
+            "mongodb": mongodb_connected,
+            "redis": redis_connected,
+            "ai_client": openai_connected
+        }
+    })
+
 # Error handlers
 @app.errorhandler(413)
 def too_large(e):
@@ -483,8 +517,9 @@ if __name__ == "__main__":
     print(f"   Redis: {'✅' if redis_connected else '❌'}")
     print(f"   OpenRouter: {'✅' if openai_connected else '❌'}")
     print(f"   Upload folder: {UPLOAD_FOLDER}")
-    print("🌐 Server starting on http://localhost:5000")
-    print("💬 Chat interface: http://localhost:5000/chat")
+    print(f"🌐 Server starting on port {PORT}")
     
     check_services()
-    app.run(debug=True, port=5000)
+    
+    # Use Railway's PORT environment variable
+    app.run(host='0.0.0.0', port=PORT, debug=False)
