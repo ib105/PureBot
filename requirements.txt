@@ -9,3 +9,4 @@ langchain-community
 faiss-cpu
 huggingface-hub
 werkzeug
+gunicorn
