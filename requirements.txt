@@ -11,3 +11,4 @@ huggingface-hub
 werkzeug
 gunicorn
 scikit-learn
+pypdf
