@@ -13,9 +13,9 @@ python-dotenv==1.0.1
 # AI dependencies
 openai==1.12.0
 
-# Lightweight LangChain components (only what we need)
-langchain-core==0.1.23
-langchain-community==0.0.20
+# Compatible LangChain components - using compatible versions
+langchain-core==0.1.40
+langchain-community==0.0.28
 langchain-text-splitters==0.0.1
 
 # PDF processing
@@ -24,12 +24,16 @@ pypdf==4.0.1
 # Vector store (CPU-only, lighter version)
 faiss-cpu==1.7.4
 
-# Lightweight embeddings
-transformers==4.36.2
-torch==2.1.2 --index-url https://download.pytorch.org/whl/cpu
+# Lightweight embeddings - using more compatible versions
 sentence-transformers==2.2.2
+transformers==4.36.2
+torch==2.1.2+cpu --find-links https://download.pytorch.org/whl/torch_stable.html
 
 # Essential utilities only
 numpy==1.24.4
 requests==2.31.0
 tiktoken==0.6.0
+
+# Additional dependencies that might be needed
+safetensors==0.4.2
+huggingface-hub==0.20.3
