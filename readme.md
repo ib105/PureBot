@@ -1,4 +1,4 @@
-# 🤖 AI Chat App
+# 🤖 PureBot
 
 A powerful AI-powered chat application with RAG (Retrieval-Augmented Generation) capabilities that allows users to upload PDF documents and ask questions about their content using advanced AI models.
 
@@ -279,21 +279,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - [MongoDB Atlas](https://www.mongodb.com/atlas) for database hosting
 - [Render](https://render.com/) for deployment platform
 
-## 📞 Support
 
-- **Issues**: [GitHub Issues](https://github.com/yourusername/ai-chat-app/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/yourusername/ai-chat-app/discussions)
-- **Email**: your.email@example.com
 
-## 🔄 Changelog
-
-### v1.0.0
-- Initial release
-- RAG system with PDF support
-- MongoDB integration
-- Modern web interface
-- Render deployment support
-
----
 
 ⭐ **Star this repo if you find it helpful!**
