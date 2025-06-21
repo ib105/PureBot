@@ -7,7 +7,7 @@ import redis
 from openai import OpenAI
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_community.vectorstores import FAISS
-from langchain_community.embeddings import HuggingFaceEmbeddings
+from sentence_transformers import SentenceTransformer
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from werkzeug.utils import secure_filename
 import os
@@ -15,6 +15,7 @@ import json
 import datetime
 import tempfile
 import shutil
+import numpy as np
 
 # Load environment variables
 load_dotenv()
@@ -100,16 +101,28 @@ except Exception as e:
     openai_client = None
     openai_connected = False
 
-# Global variable to store vectorstore
+# Global variables for RAG system
 vectorstore = None
 current_document = None
+embedding_model = None
+
+# Custom Embedding Class for FAISS compatibility
+class CustomEmbeddings:
+    def __init__(self, model_name="all-MiniLM-L6-v2"):
+        self.model = SentenceTransformer(model_name)
+    
+    def embed_documents(self, texts):
+        return self.model.encode(texts).tolist()
+    
+    def embed_query(self, text):
+        return self.model.encode([text])[0].tolist()
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 def initialize_rag_system(pdf_path):
     """Initialize RAG system with uploaded PDF"""
-    global vectorstore, current_document
+    global vectorstore, current_document, embedding_model
     try:
         print(f"🔄 Loading PDF: {pdf_path}")
         loader = PyPDFLoader(pdf_path)
@@ -125,14 +138,12 @@ def initialize_rag_system(pdf_path):
         documents = text_splitter.split_documents(pages)
         
         print("🔄 Creating embeddings...")
-        # Use HuggingFace embeddings (free, no API key needed)
-        embeddings = HuggingFaceEmbeddings(
-            model_name="all-MiniLM-L6-v2",
-            model_kwargs={'device': 'cpu'}  # Force CPU usage for Railway
-        )
+        # Initialize embedding model once
+        if embedding_model is None:
+            embedding_model = CustomEmbeddings()
         
         print("🔄 Building vector store...")
-        vectorstore = FAISS.from_documents(documents, embeddings)
+        vectorstore = FAISS.from_documents(documents, embedding_model)
         
         current_document = {
             'path': pdf_path,
@@ -209,28 +220,6 @@ def format_message(message):
     if 'timestamp' in message and isinstance(message['timestamp'], datetime.datetime):
         message['timestamp'] = message['timestamp'].isoformat()
     return message
-
-def check_services():
-    """Verify all required services are connected"""
-    print("\nService Status:")
-    
-    # Check MongoDB
-    if mongodb_connected:
-        print(f"   MongoDB: ✅ (Connected to {db.name}.{messages_collection.name})")
-    else:
-        print("   MongoDB: ❌ (Not connected)")
-    
-    # Check Redis
-    if redis_connected:
-        print("   Redis: ✅")
-    else:
-        print("   Redis: ❌ (Not connected)")
-    
-    # Check OpenAI/OpenRouter
-    if openai_connected:
-        print("   OpenRouter: ✅")
-    else:
-        print("   OpenRouter: ❌ (Not configured)")
 
 # API Endpoints
 @app.route('/')
@@ -444,47 +433,6 @@ def handle_messages():
         except Exception as e:
             return jsonify({"error": f"Failed to save message: {str(e)}"}), 500
 
-@app.route("/api/stream")
-def stream_messages():
-    """Server-sent events endpoint for real-time updates"""
-    def event_stream():
-        if redis_connected and r is not None:
-            pubsub = r.pubsub()
-            pubsub.subscribe('chat_channel')
-            
-            for message in pubsub.listen():
-                if message['type'] == 'message':
-                    yield f"data: {message['data']}\n\n"
-        else:
-            yield "data: {\"error\": \"Redis not available\"}\n\n"
-    
-    return app.response_class(event_stream(), mimetype="text/plain")
-
-@app.route("/api/documents", methods=["GET"])
-def list_documents():
-    """List uploaded documents"""
-    try:
-        documents = []
-        if os.path.exists(UPLOAD_FOLDER):
-            for filename in os.listdir(UPLOAD_FOLDER):
-                if filename.endswith('.pdf'):
-                    filepath = os.path.join(UPLOAD_FOLDER, filename)
-                    stat = os.stat(filepath)
-                    documents.append({
-                        "filename": filename,
-                        "size": stat.st_size,
-                        "uploaded": datetime.datetime.fromtimestamp(stat.st_mtime).isoformat(),
-                        "is_current": current_document and current_document['filename'] == filename
-                    })
-        
-        return jsonify({
-            "documents": documents,
-            "current_document": current_document
-        })
-        
-    except Exception as e:
-        return jsonify({"error": f"Failed to list documents: {str(e)}"}), 500
-
 # Health check endpoint for Railway
 @app.route("/health", methods=["GET"])
 def health_check():
@@ -528,5 +476,4 @@ if __name__ == "__main__":
     print(f"🌐 Server starting on http://{host}:{port}")
     print(f"💬 Chat interface: http://{host}:{port}/chat")
     
-    check_services()
     app.run(debug=debug, host=host, port=port)
