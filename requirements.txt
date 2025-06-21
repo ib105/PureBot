@@ -7,47 +7,25 @@ Werkzeug==3.0.1
 pymongo==4.6.1
 redis==5.0.1
 
-# AI and OpenAI dependencies
-openai==1.12.0
-
-# LangChain dependencies for RAG (Fixed for Railway deployment)
-# Install langsmith first to resolve dependency conflicts
-langsmith==0.0.87
-langchain-core==0.1.27
-langchain==0.1.6
-langchain-community==0.0.20
-langchain-text-splitters==0.0.1
-
-# PDF processing
-pypdf==4.0.1
-
-# Vector database and embeddings
-faiss-cpu==1.7.4
-sentence-transformers==2.2.2
-
-# HuggingFace dependencies
-transformers==4.37.2
-torch==2.2.0
-torchvision==0.17.0
-torchaudio==2.2.0
-
-# Text processing and splitting
-tiktoken==0.6.0
-
-# Environment and configuration
+# Environment
 python-dotenv==1.0.1
 
-# Date and time utilities
-python-dateutil==2.8.2
+# AI dependencies
+openai==1.12.0
 
-# HTTP requests (for API calls)
+# LangChain (let pip resolve versions automatically)
+langchain
+langchain-community
+langchain-text-splitters
+
+# PDF and Vector processing
+pypdf==4.0.1
+faiss-cpu==1.7.4
+
+# Embeddings (lightweight alternative)
+sentence-transformers==2.2.2
+
+# Utilities
+numpy<2.0.0
 requests==2.31.0
-
-# Additional utilities
-numpy==1.26.4
-
-# Optional: For better performance
-psutil==5.9.8
-
-# BSON handling
-bson==0.5.10
+tiktoken==0.6.0
