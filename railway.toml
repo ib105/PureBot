@@ -1,14 +1,16 @@
 [build]
-builder = "nixpacks"
+builder = "dockerfile"
 
 [deploy]
 startCommand = "python app.py"
-healthcheckPath = "/api/status"
-healthcheckTimeout = 300
-restartPolicyType = "on_failure"
+healthcheckPath = "/health"
+healthcheckTimeout = 100
+restartPolicyMaxRetries = 3
 
-[environments.production]
-[environments.production.variables]
-FLASK_ENV = "production"
-FLASK_DEBUG = "False"
+[[services]]
+name = "ai-chat-app"
+
+[services.variables]
+PORT = "5000"
 HOST = "0.0.0.0"
+FLASK_DEBUG = "false"
