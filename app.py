@@ -18,6 +18,8 @@ import tempfile
 import shutil
 import numpy as np
 import pickle
+import io
+from gridfs import GridFS
 
 # Load environment variables
 load_dotenv()
@@ -36,41 +38,42 @@ class JSONEncoder(json.JSONEncoder):
 app.json_encoder = JSONEncoder
 
 # File upload configuration
-UPLOAD_FOLDER = 'documents'
 ALLOWED_EXTENSIONS = {'pdf'}
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
 
-app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = MAX_FILE_SIZE
 
-# Create upload directory if it doesn't exist
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-
-# Get port from environment (Railway sets this)
+# Get port from environment (Render sets this)
 PORT = int(os.environ.get('PORT', 5000))
 
 # Database connections
 try:
-    # Fixed MongoDB connection string - corrected cluster name
+    # MongoDB connection string
     mongo_uri = os.getenv("MONGO_URI") or os.getenv("MONGODB_URL", "mongodb://localhost:27017/")
     
     # Fix common MongoDB URI issues
     if "Cluster0.mongodb.net" in mongo_uri:
         mongo_uri = mongo_uri.replace("Cluster0.mongodb.net", "cluster0.mongodb.net")
     
-    # Add additional connection options for better Railway compatibility
+    # Add additional connection options for better cloud compatibility
     client = MongoClient(
         mongo_uri,
-        serverSelectionTimeoutMS=10000,  # Increased timeout
+        serverSelectionTimeoutMS=10000,
         connectTimeoutMS=20000,
         socketTimeoutMS=30000,
         maxPoolSize=10,
         retryWrites=True,
-        tls=True,  # Enable TLS for MongoDB Atlas
+        tls=True,
         tlsAllowInvalidCertificates=False
     )
     db = client[os.getenv("DB_NAME", "ai_chat")]
     messages_collection = db["messages"]
+    documents_collection = db["documents"]  # Store document metadata
+    embeddings_collection = db["embeddings"]  # Store vector embeddings
+    
+    # Initialize GridFS for file storage
+    fs = GridFS(db)
+    
     # Test the connection
     client.admin.command('ping')
     print("✅ MongoDB connected")
@@ -78,24 +81,26 @@ try:
 except Exception as e:
     print(f"❌ MongoDB connection failed: {e}")
     messages_collection = None
+    documents_collection = None
+    embeddings_collection = None
+    fs = None
     mongodb_connected = False
 
-# Redis setup (optional for real-time features) - Skip in Railway for now
+# Redis setup (optional) - Skip for cloud deployment
 redis_connected = False
 r = None
-print("ℹ️ Redis skipped for Railway deployment")
+print("ℹ️ Redis skipped for cloud deployment")
 
-# OpenRouter/OpenAI setup - Fixed initialization
+# OpenRouter/OpenAI setup
 try:
     api_key = os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY")
     if not api_key:
         raise ValueError("No API key found. Set OPENROUTER_API_KEY or OPENAI_API_KEY")
     
-    # Fixed OpenAI client initialization - removed unsupported 'proxies' parameter
     openai_client = OpenAI(
         base_url="https://openrouter.ai/api/v1",
         api_key=api_key,
-        timeout=30.0  # Add timeout for better error handling
+        timeout=30.0
     )
     print("✅ OpenRouter client initialized")
     openai_connected = True
@@ -160,46 +165,164 @@ class LightweightEmbeddings:
                 })
         
         return results
+    
+    def save_to_db(self, document_id):
+        """Save vectorizer and embeddings to MongoDB"""
+        if not mongodb_connected or not self.fitted:
+            return False
+        
+        try:
+            # Save vectorizer
+            vectorizer_data = {
+                'document_id': document_id,
+                'vectorizer': pickle.dumps(self.vectorizer),
+                'document_texts': self.document_texts,
+                'vectors': document_vectors.tolist(),
+                'created_at': datetime.datetime.now()
+            }
+            
+            # Remove existing embeddings for this document
+            embeddings_collection.delete_many({'document_id': document_id})
+            
+            # Insert new embeddings
+            embeddings_collection.insert_one(vectorizer_data)
+            print(f"✅ Embeddings saved for document {document_id}")
+            return True
+        except Exception as e:
+            print(f"❌ Failed to save embeddings: {e}")
+            return False
+    
+    def load_from_db(self, document_id):
+        """Load vectorizer and embeddings from MongoDB"""
+        if not mongodb_connected:
+            return False
+        
+        try:
+            embedding_data = embeddings_collection.find_one({'document_id': document_id})
+            if not embedding_data:
+                return False
+            
+            self.vectorizer = pickle.loads(embedding_data['vectorizer'])
+            self.document_texts = embedding_data['document_texts']
+            self.fitted = True
+            
+            global document_vectors
+            document_vectors = np.array(embedding_data['vectors'])
+            
+            print(f"✅ Embeddings loaded for document {document_id}")
+            return True
+        except Exception as e:
+            print(f"❌ Failed to load embeddings: {e}")
+            return False
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-def initialize_rag_system(pdf_path):
-    """Initialize RAG system with uploaded PDF"""
-    global document_chunks, vectorizer, document_vectors, current_document
+def save_file_to_gridfs(file_data, filename, content_type):
+    """Save file to MongoDB GridFS"""
+    if not mongodb_connected or not fs:
+        return None
+    
     try:
-        print(f"🔄 Loading PDF: {pdf_path}")
-        loader = PyPDFLoader(pdf_path)
-        pages = loader.load_and_split()
-        
-        # Split documents into smaller chunks for better retrieval
-        text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=1000,
-            chunk_overlap=200,
-            length_function=len,
+        file_id = fs.put(
+            file_data,
+            filename=filename,
+            content_type=content_type,
+            upload_date=datetime.datetime.now()
         )
+        return file_id
+    except Exception as e:
+        print(f"❌ GridFS save error: {e}")
+        return None
+
+def get_file_from_gridfs(file_id):
+    """Retrieve file from MongoDB GridFS"""
+    if not mongodb_connected or not fs:
+        return None
+    
+    try:
+        return fs.get(file_id)
+    except Exception as e:
+        print(f"❌ GridFS retrieve error: {e}")
+        return None
+
+def initialize_rag_system(file_data, filename):
+    """Initialize RAG system with uploaded PDF data"""
+    global document_chunks, vectorizer, document_vectors, current_document
+    
+    try:
+        print(f"🔄 Processing PDF: {filename}")
         
-        documents = text_splitter.split_documents(pages)
+        # Create a temporary file for PyPDFLoader
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as temp_file:
+            temp_file.write(file_data)
+            temp_path = temp_file.name
         
-        print("🔄 Creating embeddings...")
-        # Extract text content from documents
-        texts = [doc.page_content for doc in documents]
-        
-        # Initialize lightweight embeddings
-        vectorizer = LightweightEmbeddings()
-        document_vectors = vectorizer.fit_transform(texts)
-        document_chunks = documents
-        
-        current_document = {
-            'path': pdf_path,
-            'filename': os.path.basename(pdf_path),
-            'pages': len(pages),
-            'chunks': len(documents),
-            'uploaded_at': datetime.datetime.now()
-        }
-        
-        print("✅ RAG system initialized successfully")
-        return True
+        try:
+            # Load and process PDF
+            loader = PyPDFLoader(temp_path)
+            pages = loader.load_and_split()
+            
+            # Split documents into smaller chunks
+            text_splitter = RecursiveCharacterTextSplitter(
+                chunk_size=1000,
+                chunk_overlap=200,
+                length_function=len,
+            )
+            
+            documents = text_splitter.split_documents(pages)
+            
+            print("🔄 Creating embeddings...")
+            # Extract text content from documents
+            texts = [doc.page_content for doc in documents]
+            
+            # Initialize lightweight embeddings
+            vectorizer = LightweightEmbeddings()
+            document_vectors = vectorizer.fit_transform(texts)
+            document_chunks = documents
+            
+            # Save file to GridFS
+            file_id = save_file_to_gridfs(file_data, filename, 'application/pdf')
+            
+            if file_id and mongodb_connected:
+                # Save document metadata
+                doc_metadata = {
+                    'filename': filename,
+                    'file_id': file_id,
+                    'pages': len(pages),
+                    'chunks': len(documents),
+                    'uploaded_at': datetime.datetime.now(),
+                    'file_size': len(file_data)
+                }
+                
+                # Remove existing document with same filename
+                documents_collection.delete_many({'filename': filename})
+                
+                # Insert new document
+                doc_result = documents_collection.insert_one(doc_metadata)
+                document_id = doc_result.inserted_id
+                
+                # Save embeddings
+                vectorizer.save_to_db(document_id)
+                
+                current_document = {
+                    'id': str(document_id),
+                    'filename': filename,
+                    'pages': len(pages),
+                    'chunks': len(documents),
+                    'uploaded_at': datetime.datetime.now()
+                }
+            
+            print("✅ RAG system initialized successfully")
+            return True
+            
+        finally:
+            # Clean up temporary file
+            try:
+                os.unlink(temp_path)
+            except:
+                pass
+                
     except Exception as e:
         print(f"❌ RAG setup error: {e}")
         document_chunks = []
@@ -208,6 +331,46 @@ def initialize_rag_system(pdf_path):
         current_document = None
         return False
 
+def load_existing_document():
+    """Load the most recent document from database"""
+    global document_chunks, vectorizer, document_vectors, current_document
+    
+    if not mongodb_connected:
+        return False
+    
+    try:
+        # Get the most recent document
+        doc_metadata = documents_collection.find_one(sort=[('uploaded_at', -1)])
+        if not doc_metadata:
+            return False
+        
+        document_id = doc_metadata['_id']
+        
+        # Load embeddings
+        vectorizer = LightweightEmbeddings()
+        if vectorizer.load_from_db(document_id):
+            # Reconstruct document chunks (simplified)
+            document_chunks = [type('obj', (object,), {'page_content': text}) for text in vectorizer.document_texts]
+            
+            current_document = {
+                'id': str(document_id),
+                'filename': doc_metadata['filename'],
+                'pages': doc_metadata['pages'],
+                'chunks': doc_metadata['chunks'],
+                'uploaded_at': doc_metadata['uploaded_at']
+            }
+            
+            print(f"✅ Loaded existing document: {doc_metadata['filename']}")
+            return True
+    
+    except Exception as e:
+        print(f"❌ Failed to load existing document: {e}")
+    
+    return False
+
+# Load existing document on startup
+load_existing_document()
+
 def get_ai_response(question, context=None):
     """Get response from AI model with improved error handling"""
     if not openai_connected or not openai_client:
@@ -215,7 +378,6 @@ def get_ai_response(question, context=None):
     
     try:
         if context:
-            # RAG mode - use context from documents
             system_message = """You are a helpful AI assistant that answers questions based on the provided context from uploaded documents. 
             Use the context to provide accurate and relevant answers. If the context doesn't contain enough information to answer the question, 
             say so clearly. Always be helpful and informative."""
@@ -227,7 +389,6 @@ Question: {question}
 
 Please answer the question based on the provided context."""
         else:
-            # General AI mode
             system_message = "You are a helpful AI assistant. Provide accurate, informative, and helpful responses to user questions."
             user_message = question
         
@@ -281,7 +442,7 @@ def format_message(message):
 # API Endpoints
 @app.route('/')
 def home():
-    return """
+    return f"""
     <h1>🤖 AI Chat App</h1>
     <p><strong><a href="/chat">🚀 Go to Chat Interface</a></strong></p>
     <h2>📡 API Endpoints:</h2>
@@ -298,6 +459,7 @@ def home():
         <li>MongoDB: {"✅ Connected" if mongodb_connected else "❌ Disconnected"}</li>
         <li>Redis: {"✅ Connected" if redis_connected else "❌ Disconnected"}</li>
         <li>AI Client: {"✅ Ready" if openai_connected else "❌ Not configured"}</li>
+        <li>Current Document: {"✅ " + current_document['filename'] if current_document else "❌ None"}</li>
     </ul>
     """
 
@@ -349,12 +511,11 @@ def upload_document():
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"{timestamp}_{filename}"
         
-        # Save the file
-        filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-        file.save(filepath)
+        # Read file data into memory
+        file_data = file.read()
         
-        # Initialize RAG system with the uploaded file
-        if initialize_rag_system(filepath):
+        # Initialize RAG system with the file data
+        if initialize_rag_system(file_data, filename):
             return jsonify({
                 "status": "Document uploaded and processed successfully!",
                 "filename": filename,
@@ -465,19 +626,17 @@ def ai_chat():
 def handle_messages():
     """Handle message retrieval and sending"""
     if request.method == "GET":
-        # Retrieve recent messages
         try:
             if mongodb_connected and messages_collection is not None:
                 messages = list(messages_collection.find().sort("timestamp", -1).limit(50))
                 formatted_messages = [format_message(msg) for msg in messages]
-                return jsonify({"messages": formatted_messages[::-1]})  # Reverse to show oldest first
+                return jsonify({"messages": formatted_messages[::-1]})
             else:
                 return jsonify({"messages": []})
         except Exception as e:
             return jsonify({"error": f"Failed to retrieve messages: {str(e)}"}), 500
     
     elif request.method == "POST":
-        # This endpoint can be used for simple message sending
         data = request.get_json()
         
         if not data or 'message' not in data:
@@ -501,7 +660,7 @@ def handle_messages():
         except Exception as e:
             return jsonify({"error": f"Failed to save message: {str(e)}"}), 500
 
-# Health check endpoint for Railway
+# Health check endpoint
 @app.route("/health", methods=["GET"])
 def health_check():
     """Health check endpoint"""
@@ -534,9 +693,12 @@ if __name__ == "__main__":
     print(f"   MongoDB: {'✅' if mongodb_connected else '❌'}")
     print(f"   Redis: {'✅' if redis_connected else '❌'}")
     print(f"   OpenRouter: {'✅' if openai_connected else '❌'}")
-    print(f"   Upload folder: {UPLOAD_FOLDER}")
     
-    # Railway compatibility - use environment variables for host and port
+    if current_document:
+        print(f"   Current Document: ✅ {current_document['filename']}")
+    else:
+        print("   Current Document: ❌ None")
+    
     port = int(os.getenv("PORT", 5000))
     host = os.getenv("HOST", "0.0.0.0")
     debug = os.getenv("FLASK_DEBUG", "False").lower() == "true"
@@ -544,11 +706,8 @@ if __name__ == "__main__":
     print(f"🌐 Server starting on http://{host}:{port}")
     print(f"💬 Chat interface: http://{host}:{port}/chat")
     
-    # Show startup warnings
     if not mongodb_connected:
-        print("⚠️  Warning: MongoDB not connected - message persistence disabled")
-    if not redis_connected:
-        print("⚠️  Warning: Redis not connected - real-time features disabled")
+        print("⚠️  Warning: MongoDB not connected - features limited")
     if not openai_connected:
         print("⚠️  Warning: AI client not ready - chat features disabled")
     
