@@ -245,6 +245,10 @@ export FLASK_DEBUG=true
 python app.py
 ```
 
+### App Interface
+<img width="895" alt="image" src="https://github.com/user-attachments/assets/cabf1e21-3f7f-4c4a-8e66-4b6b337c1a4b" />
+
+
 ## 🤝 Contributing
 
 1. **Fork the repository**
