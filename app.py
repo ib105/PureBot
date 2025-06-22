@@ -1,5 +1,4 @@
-from flask import Flask, request, jsonify, send_from_directory, render_template_string, session
-import secrets
+from flask import Flask, request, jsonify, send_from_directory, render_template_string
 from flask_cors import CORS
 from pymongo import MongoClient
 from bson import ObjectId
@@ -46,8 +45,6 @@ app.config['MAX_CONTENT_LENGTH'] = MAX_FILE_SIZE
 
 # Get port from environment (Render sets this)
 PORT = int(os.environ.get('PORT', 5000))
-
-app.secret_key = os.getenv('SECRET_KEY', secrets.token_hex(16))
 
 # Database connections
 try:
@@ -256,47 +253,6 @@ class LightweightEmbeddings:
             traceback.print_exc()
             return False
 
-# User-specific RAG system storage
-user_rag_systems = {}  # user_id -> {'chunks': [], 'vectorizer': LightweightEmbeddings(), 'document': {}}
-
-def get_user_rag_system(user_id):
-    """Get or create RAG system for user"""
-    if user_id not in user_rag_systems:
-        user_rag_systems[user_id] = {
-            'chunks': [],
-            'vectorizer': None,
-            'document': None
-        }
-    return user_rag_systems[user_id]
-
-
-# Add user management functions
-def get_or_create_user_id():
-    """Get existing user ID from session or create new one"""
-    if 'user_id' not in session:
-        session['user_id'] = secrets.token_urlsafe(16)
-    return session['user_id']
-
-def get_user_documents(user_id):
-    """Get all documents for a specific user"""
-    if not mongodb_connected:
-        return []
-    try:
-        return list(documents_collection.find({'user_id': user_id}).sort('uploaded_at', -1))
-    except Exception as e:
-        print(f"❌ Failed to get user documents: {e}")
-        return []
-
-def get_user_latest_document(user_id):
-    """Get the latest document for a specific user"""
-    if not mongodb_connected:
-        return None
-    try:
-        return documents_collection.find_one({'user_id': user_id}, sort=[('uploaded_at', -1)])
-    except Exception as e:
-        print(f"❌ Failed to get latest user document: {e}")
-        return None
-        
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
@@ -328,13 +284,12 @@ def get_file_from_gridfs(file_id):
         print(f"❌ GridFS retrieve error: {e}")
         return None
 
-def initialize_rag_system(file_data, filename, user_id):
+def initialize_rag_system(file_data, filename):
     """Initialize RAG system with uploaded PDF data"""
     global document_chunks, vectorizer, current_document
-    user_rag = get_user_rag_system(user_id)
     
     try:
-        print(f"🔄 Processing PDF for user {user_id}: {filename}")
+        print(f"🔄 Processing PDF: {filename}")
         
         # Create a temporary file for PyPDFLoader
         with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as temp_file:
@@ -392,7 +347,6 @@ def initialize_rag_system(file_data, filename, user_id):
             if file_id and mongodb_connected:
                 # Save document metadata
                 doc_metadata = {
-                    'user_id': user_id,  # Add this line
                     'filename': filename,
                     'file_id': file_id,
                     'pages': len(pages),
@@ -408,20 +362,18 @@ def initialize_rag_system(file_data, filename, user_id):
                 doc_result = documents_collection.insert_one(doc_metadata)
                 document_id = doc_result.inserted_id
                 
-                # Save embeddings with user context
-                user_rag['vectorizer'].save_to_db(document_id)
-
-                # Update user's current document
-                user_rag['document'] = {
+                # Save embeddings
+                vectorizer.save_to_db(document_id)
+                
+                current_document = {
                     'id': str(document_id),
                     'filename': filename,
                     'pages': len(pages),
                     'chunks': len(documents),
                     'uploaded_at': datetime.datetime.now()
                 }
-                user_rag['chunks'] = documents
             
-            print(f"✅ RAG system initialized for user {user_id}")
+            print("✅ RAG system initialized successfully")
             return True
             
         finally:
@@ -432,7 +384,7 @@ def initialize_rag_system(file_data, filename, user_id):
                 pass
                 
     except Exception as e:
-        print(f"❌ RAG setup error for user {user_id}: {e}")
+        print(f"❌ RAG setup error: {e}")
         import traceback
         traceback.print_exc()
         document_chunks = []
@@ -440,36 +392,30 @@ def initialize_rag_system(file_data, filename, user_id):
         current_document = None
         return False
 
-def load_existing_document_for_user(user_id):
-    """Load the most recent document for a specific user"""
-    user_rag = get_user_rag_system(user_id)
+def load_existing_document():
+    """Load the most recent document from database"""
+    global document_chunks, vectorizer, current_document
     
     if not mongodb_connected:
         return False
     
     try:
-        # Get the most recent document for this user
-        doc_metadata = documents_collection.find_one(
-            {'user_id': user_id}, 
-            sort=[('uploaded_at', -1)]
-        )
+        # Get the most recent document
+        doc_metadata = documents_collection.find_one(sort=[('uploaded_at', -1)])
         if not doc_metadata:
-            print(f"📭 No existing documents found for user {user_id}")
+            print("📭 No existing documents found")
             return False
         
         document_id = doc_metadata['_id']
-        print(f"🔄 Loading document for user {user_id}: {doc_metadata['filename']}")
+        print(f"🔄 Loading document: {doc_metadata['filename']}")
         
         # Load embeddings
-        user_rag['vectorizer'] = LightweightEmbeddings()
-        if user_rag['vectorizer'].load_from_db(document_id):
-            # Reconstruct document chunks
-            user_rag['chunks'] = [
-                type('obj', (object,), {'page_content': text}) 
-                for text in user_rag['vectorizer'].document_texts
-            ]
+        vectorizer = LightweightEmbeddings()
+        if vectorizer.load_from_db(document_id):
+            # Reconstruct document chunks (simplified)
+            document_chunks = [type('obj', (object,), {'page_content': text}) for text in vectorizer.document_texts]
             
-            user_rag['document'] = {
+            current_document = {
                 'id': str(document_id),
                 'filename': doc_metadata['filename'],
                 'pages': doc_metadata['pages'],
@@ -477,13 +423,20 @@ def load_existing_document_for_user(user_id):
                 'uploaded_at': doc_metadata['uploaded_at']
             }
             
-            print(f"✅ Loaded existing document for user {user_id}: {doc_metadata['filename']}")
+            print(f"✅ Loaded existing document: {doc_metadata['filename']}")
             return True
-        
+        else:
+            print(f"❌ Failed to load embeddings for document: {doc_metadata['filename']}")
+    
     except Exception as e:
-        print(f"❌ Failed to load existing document for user {user_id}: {e}")
+        print(f"❌ Failed to load existing document: {e}")
+        import traceback
+        traceback.print_exc()
     
     return False
+
+# Load existing document on startup
+load_existing_document()
 
 def get_ai_response(question, context=None):
     """Get response from AI model with improved error handling"""
@@ -594,21 +547,13 @@ def chat_interface():
 @app.route("/api/status", methods=["GET"])
 def get_status():
     """Get system status"""
-    user_id = get_or_create_user_id()
-    user_rag = get_user_rag_system(user_id)
-    
-    # Load user's document if not already loaded
-    if not user_rag['vectorizer'] and not user_rag['document']:
-        load_existing_document_for_user(user_id)
-    
     status = {
         "timestamp": datetime.datetime.now().isoformat(),
-        "user_id": user_id,
         "mongodb_connected": mongodb_connected,
         "redis_connected": redis_connected,
         "ai_client_ready": openai_connected,
-        "rag_system_ready": user_rag['vectorizer'] is not None and len(user_rag['chunks']) > 0,
-        "current_document": user_rag['document'],
+        "rag_system_ready": vectorizer is not None and len(document_chunks) > 0,
+        "current_document": current_document,
         "status": "healthy" if (mongodb_connected or openai_connected) else "degraded"
     }
     return jsonify(status)
@@ -616,8 +561,6 @@ def get_status():
 @app.route("/api/upload", methods=["POST"])
 def upload_document():
     """Handle PDF document upload"""
-    user_id = get_or_create_user_id()
-    
     if 'document' not in request.files:
         return jsonify({"error": "No file provided"}), 400
     
@@ -639,13 +582,12 @@ def upload_document():
         file_data = file.read()
         
         # Initialize RAG system with the file data
-        if initialize_rag_system(file_data, filename, user_id):
-            user_rag = get_user_rag_system(user_id)
+        if initialize_rag_system(file_data, filename):
             return jsonify({
                 "status": "Document uploaded and processed successfully!",
                 "filename": filename,
                 "message": "You can now ask questions about the document",
-                "document_info": user_rag['document']
+                "document_info": current_document
             }), 200
         else:
             return jsonify({"error": "Failed to process the uploaded document"}), 500
@@ -656,12 +598,6 @@ def upload_document():
 @app.route("/api/rag", methods=["POST"])
 def rag_chat():
     """Handle RAG-based chat queries"""
-    user_id = get_or_create_user_id()
-    user_rag = get_user_rag_system(user_id)
-    # Load user's document if not already loaded
-    if not user_rag['vectorizer']:
-        load_existing_document_for_user(user_id)
-
     data = request.get_json()
     
     if not data or 'question' not in data:
@@ -671,9 +607,6 @@ def rag_chat():
     
     if not question:
         return jsonify({"error": "Question cannot be empty"}), 400
-
-    if not user_rag['vectorizer']:
-        return jsonify({"error": "No document processing system available. Please upload a PDF document first."}), 400
     
     # Check RAG system status
     if not vectorizer:
