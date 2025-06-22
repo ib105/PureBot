@@ -486,7 +486,7 @@ def load_existing_document_for_user(user_id):
     return False
 
 # Load existing document on startup
-load_existing_document_for_user()
+load_existing_document_for_user(user_id)
 
 def get_ai_response(question, context=None):
     """Get response from AI model with improved error handling"""
