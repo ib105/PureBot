@@ -127,13 +127,15 @@ class LightweightEmbeddings:
         )
         self.fitted = False
         self.document_texts = []
+        self.document_vectors = None  # Store vectors in the class instance
     
     def fit_transform(self, texts):
         """Fit the vectorizer and transform texts"""
         self.document_texts = texts
         vectors = self.vectorizer.fit_transform(texts)
         self.fitted = True
-        return vectors.toarray()
+        self.document_vectors = vectors.toarray()  # Store in instance
+        return self.document_vectors
     
     def transform_query(self, query):
         """Transform a query using the fitted vectorizer"""
@@ -143,28 +145,55 @@ class LightweightEmbeddings:
     
     def similarity_search(self, query, k=3):
         """Find most similar documents to query"""
-        if not self.fitted or not self.document_texts:
+        if not self.fitted or not self.document_texts or self.document_vectors is None:
+            print("❌ Embeddings not fitted or no document texts")
+            print(f"   fitted: {self.fitted}")
+            print(f"   document_texts: {len(self.document_texts) if self.document_texts else 0}")
+            print(f"   document_vectors: {self.document_vectors is not None}")
             return []
         
-        query_vector = self.transform_query(query)
+        try:
+            query_vector = self.transform_query(query)
+            print(f"🔍 Query: '{query}'")
+            print(f"🔍 Query vector shape: {query_vector.shape}")
+            print(f"📄 Document vectors shape: {self.document_vectors.shape}")
+            
+            # Calculate cosine similarity using instance vectors
+            similarities = cosine_similarity([query_vector], self.document_vectors)[0]
+            print(f"📊 Similarity scores: min={similarities.min():.3f}, max={similarities.max():.3f}, mean={similarities.mean():.3f}")
+            
+            # Get top k indices
+            top_indices = np.argsort(similarities)[::-1][:k]
+            
+            # Return documents with similarity scores (very low threshold)
+            results = []
+            for idx in top_indices:
+                if similarities[idx] > 0.001:  # Very low threshold
+                    results.append({
+                        'content': self.document_texts[idx],
+                        'similarity': similarities[idx],
+                        'index': idx
+                    })
+                    print(f"✅ Found relevant chunk {idx} with similarity {similarities[idx]:.3f}")
+            
+            # If no results above threshold, return top results anyway
+            if not results:
+                print("⚠️ No results above threshold, returning top results")
+                for i, idx in enumerate(top_indices[:3]):
+                    results.append({
+                        'content': self.document_texts[idx],
+                        'similarity': similarities[idx],
+                        'index': idx
+                    })
+                    print(f"📝 Fallback chunk {idx} with similarity {similarities[idx]:.3f}")
+            
+            return results
         
-        # Calculate cosine similarity
-        similarities = cosine_similarity([query_vector], document_vectors)[0]
-        
-        # Get top k indices
-        top_indices = np.argsort(similarities)[::-1][:k]
-        
-        # Return documents with similarity scores
-        results = []
-        for idx in top_indices:
-            if similarities[idx] > 0.1:  # Minimum similarity threshold
-                results.append({
-                    'content': self.document_texts[idx],
-                    'similarity': similarities[idx],
-                    'index': idx
-                })
-        
-        return results
+        except Exception as e:
+            print(f"❌ Similarity search error: {e}")
+            import traceback
+            traceback.print_exc()
+            return []
     
     def save_to_db(self, document_id):
         """Save vectorizer and embeddings to MongoDB"""
@@ -177,7 +206,7 @@ class LightweightEmbeddings:
                 'document_id': document_id,
                 'vectorizer': pickle.dumps(self.vectorizer),
                 'document_texts': self.document_texts,
-                'vectors': document_vectors.tolist(),
+                'vectors': self.document_vectors.tolist(),  # Use instance vectors
                 'created_at': datetime.datetime.now()
             }
             
@@ -187,6 +216,8 @@ class LightweightEmbeddings:
             # Insert new embeddings
             embeddings_collection.insert_one(vectorizer_data)
             print(f"✅ Embeddings saved for document {document_id}")
+            print(f"   Texts: {len(self.document_texts)}")
+            print(f"   Vectors: {self.document_vectors.shape}")
             return True
         except Exception as e:
             print(f"❌ Failed to save embeddings: {e}")
@@ -195,24 +226,31 @@ class LightweightEmbeddings:
     def load_from_db(self, document_id):
         """Load vectorizer and embeddings from MongoDB"""
         if not mongodb_connected:
+            print("❌ MongoDB not connected")
             return False
         
         try:
             embedding_data = embeddings_collection.find_one({'document_id': document_id})
             if not embedding_data:
+                print(f"❌ No embeddings found for document {document_id}")
                 return False
             
             self.vectorizer = pickle.loads(embedding_data['vectorizer'])
             self.document_texts = embedding_data['document_texts']
             self.fitted = True
             
-            global document_vectors
-            document_vectors = np.array(embedding_data['vectors'])
+            # Store vectors in instance, not global variable
+            self.document_vectors = np.array(embedding_data['vectors'])
             
             print(f"✅ Embeddings loaded for document {document_id}")
+            print(f"📊 Loaded {len(self.document_texts)} text chunks")
+            print(f"📊 Vector shape: {self.document_vectors.shape}")
+            print(f"📊 Vectorizer vocabulary size: {len(self.vectorizer.vocabulary_)}")
             return True
         except Exception as e:
             print(f"❌ Failed to load embeddings: {e}")
+            import traceback
+            traceback.print_exc()
             return False
 
 def allowed_file(filename):
@@ -248,7 +286,7 @@ def get_file_from_gridfs(file_id):
 
 def initialize_rag_system(file_data, filename):
     """Initialize RAG system with uploaded PDF data"""
-    global document_chunks, vectorizer, document_vectors, current_document
+    global document_chunks, vectorizer, current_document
     
     try:
         print(f"🔄 Processing PDF: {filename}")
@@ -263,6 +301,12 @@ def initialize_rag_system(file_data, filename):
             loader = PyPDFLoader(temp_path)
             pages = loader.load_and_split()
             
+            if not pages:
+                print("❌ No pages extracted from PDF")
+                return False
+            
+            print(f"📄 Extracted {len(pages)} pages")
+            
             # Split documents into smaller chunks
             text_splitter = RecursiveCharacterTextSplitter(
                 chunk_size=1000,
@@ -272,14 +316,30 @@ def initialize_rag_system(file_data, filename):
             
             documents = text_splitter.split_documents(pages)
             
-            print("🔄 Creating embeddings...")
+            if not documents:
+                print("❌ No chunks created from documents")
+                return False
+            
+            print(f"📝 Created {len(documents)} chunks")
+            
             # Extract text content from documents
             texts = [doc.page_content for doc in documents]
             
+            # Filter out empty texts
+            texts = [text.strip() for text in texts if text.strip()]
+            
+            if not texts:
+                print("❌ No valid text content found")
+                return False
+            
+            print(f"✅ Processing {len(texts)} text chunks")
+            
             # Initialize lightweight embeddings
             vectorizer = LightweightEmbeddings()
-            document_vectors = vectorizer.fit_transform(texts)
+            vectorizer.fit_transform(texts)
             document_chunks = documents
+            
+            print("✅ Embeddings created successfully")
             
             # Save file to GridFS
             file_id = save_file_to_gridfs(file_data, filename, 'application/pdf')
@@ -325,15 +385,16 @@ def initialize_rag_system(file_data, filename):
                 
     except Exception as e:
         print(f"❌ RAG setup error: {e}")
+        import traceback
+        traceback.print_exc()
         document_chunks = []
         vectorizer = None
-        document_vectors = None
         current_document = None
         return False
 
 def load_existing_document():
     """Load the most recent document from database"""
-    global document_chunks, vectorizer, document_vectors, current_document
+    global document_chunks, vectorizer, current_document
     
     if not mongodb_connected:
         return False
@@ -342,9 +403,11 @@ def load_existing_document():
         # Get the most recent document
         doc_metadata = documents_collection.find_one(sort=[('uploaded_at', -1)])
         if not doc_metadata:
+            print("📭 No existing documents found")
             return False
         
         document_id = doc_metadata['_id']
+        print(f"🔄 Loading document: {doc_metadata['filename']}")
         
         # Load embeddings
         vectorizer = LightweightEmbeddings()
@@ -362,9 +425,13 @@ def load_existing_document():
             
             print(f"✅ Loaded existing document: {doc_metadata['filename']}")
             return True
+        else:
+            print(f"❌ Failed to load embeddings for document: {doc_metadata['filename']}")
     
     except Exception as e:
         print(f"❌ Failed to load existing document: {e}")
+        import traceback
+        traceback.print_exc()
     
     return False
 
@@ -541,27 +608,60 @@ def rag_chat():
     if not question:
         return jsonify({"error": "Question cannot be empty"}), 400
     
-    if not vectorizer or not document_chunks:
-        return jsonify({"error": "No document uploaded. Please upload a PDF document first."}), 400
+    # Check RAG system status
+    if not vectorizer:
+        return jsonify({"error": "No document processing system available. Please upload a PDF document first."}), 400
+    
+    if not vectorizer.fitted:
+        return jsonify({"error": "Document processing system not ready. Please try uploading the document again."}), 400
+    
+    if not document_chunks:
+        return jsonify({"error": "No document chunks available. Please upload a PDF document first."}), 400
     
     try:
-        # Retrieve relevant documents using lightweight similarity search
-        similar_docs = vectorizer.similarity_search(question, k=3)
+        print(f"🔍 Processing RAG query: '{question}'")
+        print(f"📚 Available chunks: {len(document_chunks)}")
+        print(f"🔧 Vectorizer fitted: {vectorizer.fitted}")
+        print(f"📄 Document texts count: {len(vectorizer.document_texts) if vectorizer.document_texts else 0}")
+        print(f"🧮 Document vectors shape: {vectorizer.document_vectors.shape if vectorizer.document_vectors is not None else 'None'}")
+        
+        # Retrieve relevant documents using similarity search
+        similar_docs = vectorizer.similarity_search(question, k=5)
+        
+        print(f"🔍 Found {len(similar_docs)} similar documents")
         
         if not similar_docs:
-            return jsonify({"error": "No relevant content found in the document."}), 400
+            # Fallback: use first few chunks
+            print("⚠️ No similar docs found, using first 3 chunks as fallback")
+            if len(document_chunks) >= 3:
+                fallback_chunks = document_chunks[:3]
+            else:
+                fallback_chunks = document_chunks
+            
+            context = "\n\n".join([chunk.page_content for chunk in fallback_chunks])
+            sources_used = len(fallback_chunks)
+            
+            if not context.strip():
+                return jsonify({"error": "Document appears to be empty or unreadable. Please try uploading again."}), 400
+        else:
+            # Combine context from retrieved documents
+            context = "\n\n".join([doc['content'] for doc in similar_docs])
+            sources_used = len(similar_docs)
+            print(f"✅ Using {sources_used} relevant chunks")
         
-        # Combine context from retrieved documents
-        context = "\n\n".join([doc['content'] for doc in similar_docs])
+        print(f"📝 Context length: {len(context)} characters")
         
         # Get AI response with context
         answer, model_used = get_ai_response(question, context)
+        
+        if not answer:
+            return jsonify({"error": "Failed to generate AI response. Please try again."}), 500
         
         # Save conversation to database
         message_data = {
             "question": question,
             "answer": answer,
-            "context_used": len(similar_docs),
+            "context_used": sources_used,
             "mode": "rag",
             "model": model_used,
             "document": current_document['filename'] if current_document else None,
@@ -573,7 +673,7 @@ def rag_chat():
         response_data = {
             "answer": answer,
             "model": model_used,
-            "sources_used": len(similar_docs),
+            "sources_used": sources_used,
             "document": current_document['filename'] if current_document else None,
             "message_id": message_id
         }
@@ -581,6 +681,9 @@ def rag_chat():
         return jsonify(response_data)
         
     except Exception as e:
+        print(f"❌ RAG query failed: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({"error": f"RAG query failed: {str(e)}"}), 500
 
 @app.route("/api/ai", methods=["POST"])
@@ -621,6 +724,111 @@ def ai_chat():
         
     except Exception as e:
         return jsonify({"error": f"AI query failed: {str(e)}"}), 500
+
+@app.route("/api/debug/rag", methods=["GET"])
+def debug_rag_detailed():
+    """Comprehensive RAG system debug info"""
+    debug_info = {
+        "timestamp": datetime.datetime.now().isoformat(),
+        "vectorizer_exists": vectorizer is not None,
+        "document_chunks_count": len(document_chunks),
+        "current_document": current_document
+    }
+    
+    if vectorizer:
+        debug_info.update({
+            "vectorizer_fitted": vectorizer.fitted,
+            "document_texts_count": len(vectorizer.document_texts) if vectorizer.document_texts else 0,
+            "document_vectors_shape": vectorizer.document_vectors.shape if vectorizer.document_vectors is not None else None,
+            "has_sklearn_vectorizer": hasattr(vectorizer, 'vectorizer') and vectorizer.vectorizer is not None
+        })
+        
+        if vectorizer.fitted and hasattr(vectorizer.vectorizer, 'vocabulary_'):
+            debug_info["vectorizer_vocab_size"] = len(vectorizer.vectorizer.vocabulary_)
+            # Sample some vocabulary words
+            vocab_sample = list(vectorizer.vectorizer.vocabulary_.keys())[:10]
+            debug_info["vocab_sample"] = vocab_sample
+    
+    # Check database contents
+    if mongodb_connected:
+        try:
+            docs_count = documents_collection.count_documents({})
+            embeddings_count = embeddings_collection.count_documents({})
+            
+            debug_info.update({
+                "mongodb_connected": True,
+                "db_documents_count": docs_count,
+                "db_embeddings_count": embeddings_count
+            })
+            
+            # Get latest document from DB
+            latest_doc = documents_collection.find_one(sort=[('uploaded_at', -1)])
+            if latest_doc:
+                debug_info["latest_db_document"] = {
+                    "id": str(latest_doc['_id']),
+                    "filename": latest_doc['filename'],
+                    "chunks": latest_doc['chunks'],
+                    "uploaded_at": latest_doc['uploaded_at'].isoformat()
+                }
+        except Exception as e:
+            debug_info["db_error"] = str(e)
+    else:
+        debug_info["mongodb_connected"] = False
+    
+    return jsonify(debug_info)
+
+@app.route("/api/debug/search", methods=["POST"])
+def debug_search():
+    """Test search functionality with detailed output"""
+    data = request.get_json()
+    if not data or 'query' not in data:
+        return jsonify({"error": "Query required"}), 400
+    
+    query = data['query']
+    
+    if not vectorizer:
+        return jsonify({"error": "No vectorizer available"}), 400
+    
+    if not vectorizer.fitted:
+        return jsonify({"error": "Vectorizer not fitted"}), 400
+    
+    try:
+        # Detailed search test
+        results = vectorizer.similarity_search(query, k=5)
+        
+        response = {
+            "query": query,
+            "results_count": len(results),
+            "vectorizer_status": {
+                "fitted": vectorizer.fitted,
+                "document_texts_count": len(vectorizer.document_texts),
+                "vectors_shape": vectorizer.document_vectors.shape if vectorizer.document_vectors is not None else None
+            }
+        }
+        
+        if results:
+            response["results"] = [
+                {
+                    "index": r['index'],
+                    "similarity": float(r['similarity']),
+                    "content_length": len(r['content']),
+                    "content_preview": r['content'][:200] + "..." if len(r['content']) > 200 else r['content']
+                } for r in results
+            ]
+        else:
+            response["fallback_info"] = {
+                "total_texts": len(vectorizer.document_texts),
+                "first_text_preview": vectorizer.document_texts[0][:200] + "..." if vectorizer.document_texts else "No texts available"
+            }
+        
+        return jsonify(response)
+    
+    except Exception as e:
+        import traceback
+        return jsonify({
+            "error": f"Search test failed: {str(e)}",
+            "traceback": traceback.format_exc()
+        }), 500
 
 @app.route("/api/messages", methods=["GET", "POST"])
 def handle_messages():
