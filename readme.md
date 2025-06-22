@@ -180,13 +180,6 @@ ai-chat-app/
    - Render will build and deploy your app
    - Access via the provided Render URL
 
-### Deploy on Other Platforms
-
-The app is containerizable and can be deployed on:
-- **Heroku** - Add Procfile: `web: gunicorn app:app`
-- **Railway** - Automatic detection
-- **DigitalOcean App Platform** - Use the requirements.txt
-- **AWS/GCP/Azure** - Container or serverless deployment
 
 ## 🔍 Usage
 
