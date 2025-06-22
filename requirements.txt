@@ -12,4 +12,4 @@ werkzeug
 gunicorn
 scikit-learn
 pypdf
-gridfs
+pymongo
