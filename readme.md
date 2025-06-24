@@ -1,19 +1,19 @@
-# 🤖 PureBot
+# PureBot
 
 A powerful AI-powered chat application with RAG (Retrieval-Augmented Generation) capabilities that allows users to upload PDF documents and ask questions about their content using advanced AI models.
 
-## ✨ Features
+## Features
 
-- **📄 PDF Document Upload**: Upload and process PDF documents up to 10MB
-- **🧠 RAG-Powered Chat**: Ask questions about uploaded documents with context-aware responses
-- **💬 General AI Chat**: Chat with AI assistant for general queries
-- **🔍 Smart Document Search**: TF-IDF based similarity search for relevant content retrieval
-- **📱 Responsive Design**: Beautiful, mobile-friendly interface
-- **⚡ Real-time Responses**: Fast AI responses powered by OpenRouter/DeepSeek
-- **💾 Message Persistence**: MongoDB integration for chat history
-- **🎨 Modern UI**: Gradient backgrounds, animations, and intuitive design
+- **PDF Document Upload**: Upload and process PDF documents up to 10MB
+- **RAG-Powered Chat**: Ask questions about uploaded documents with context-aware responses
+- **General AI Chat**: Chat with AI assistant for general queries
+- **Smart Document Search**: TF-IDF based similarity search for relevant content retrieval
+- **Responsive Design**: Beautiful, mobile-friendly interface
+- **Real-time Responses**: Fast AI responses powered by OpenRouter/DeepSeek
+- **Message Persistence**: MongoDB integration for chat history
+- **Modern UI**: Gradient backgrounds, animations, and intuitive design
 
-## 🛠️ Technology Stack
+## Technology Stack
 
 ### Backend
 - **Flask** - Python web framework
@@ -32,7 +32,7 @@ A powerful AI-powered chat application with RAG (Retrieval-Augmented Generation)
 - **Render** - Cloud deployment platform
 - **Gunicorn** - WSGI HTTP Server
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Prerequisites
 
@@ -138,7 +138,7 @@ curl -X POST http://localhost:5000/api/upload \
   -F "document=@your_document.pdf"
 ```
 
-## 🏗️ Architecture
+## Architecture
 
 ### RAG System Flow
 
@@ -161,7 +161,7 @@ ai-chat-app/
 └── README.md          # This file
 ```
 
-## 🌐 Deployment
+## Deployment
 
 ### Deploy on Render
 
@@ -181,7 +181,7 @@ ai-chat-app/
    - Access via the provided Render URL
 
 
-## 🔍 Usage
+## Usage
 
 ### Basic Chat Flow
 
@@ -203,7 +203,7 @@ ai-chat-app/
 - "Write a Python function to sort a list"
 - "What's the weather like today?"
 
-## 🛡️ Security Features
+## Security Features
 
 - **File Type Validation** - Only PDF files allowed
 - **File Size Limits** - Maximum 10MB uploads
@@ -211,7 +211,7 @@ ai-chat-app/
 - **Environment Variable Protection** - Sensitive data in .env
 - **Error Handling** - Graceful failure modes
 
-## 🔧 Troubleshooting
+## Troubleshooting
 
 ### Common Issues
 
@@ -249,7 +249,7 @@ python app.py
 <img width="895" alt="image" src="https://github.com/user-attachments/assets/cabf1e21-3f7f-4c4a-8e66-4b6b337c1a4b" />
 
 
-## 🤝 Contributing
+## Contributing
 
 1. **Fork the repository**
 2. **Create a feature branch** (`git checkout -b feature/amazing-feature`)
@@ -265,11 +265,11 @@ python app.py
 - Ensure mobile responsiveness
 - Add error handling for new features
 
-## 📝 License
+## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## 🙏 Acknowledgments
+## Acknowledgments
 
 - [OpenRouter](https://openrouter.ai/) for AI model access
 - [LangChain](https://langchain.com/) for document processing
@@ -277,6 +277,3 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - [Render](https://render.com/) for deployment platform
 
 
-
-
-⭐ **Star this repo if you find it helpful!**
