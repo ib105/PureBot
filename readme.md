@@ -2,6 +2,10 @@
 
 A powerful AI-powered chat application with RAG (Retrieval-Augmented Generation) capabilities that allows users to upload PDF documents and ask questions about their content using advanced AI models.
 
+**Please Note that this bot was deployed in Render's free tier for testing so loading will take around 50 seconds.**
+
+
+
 ## Features
 
 - **PDF Document Upload**: Upload and process PDF documents up to 10MB
