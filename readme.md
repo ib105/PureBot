@@ -269,10 +269,6 @@ python app.py
 - Ensure mobile responsiveness
 - Add error handling for new features
 
-## License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
 ## Acknowledgments
 
 - [OpenRouter](https://openrouter.ai/) for AI model access
