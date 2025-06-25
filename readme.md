@@ -4,6 +4,7 @@ A powerful AI-powered chat application with RAG (Retrieval-Augmented Generation)
 
 **Please Note that this bot was deployed in Render's free tier for testing so loading will take around 50 seconds.**
 
+https://purebot-8mjz.onrender.com/
 
 
 ## Features
